@@ -2,11 +2,14 @@ import 'preact/debug'
 import 'preact/devtools'
 import { render } from 'preact'
 import { useState, useEffect } from 'preact/hooks'
+import Router from 'preact-router'
 import { NostrClient } from './api/nostr_client.ts'
 import { App } from './components/App.tsx'
 import { LoadingState } from './components/LoadingState.tsx'
 import { ErrorState } from './components/ErrorState.tsx'
 import { AuthPrompt } from './components/AuthPrompt.tsx'
+import { LandingPage } from './components/LandingPage.tsx'
+import { AdminPanel } from './components/admin/AdminPanel.tsx'
 import './style.css'
 
 // Get WebSocket URL from environment variable or use current host
@@ -82,7 +85,7 @@ const Initialization = ({ onComplete }: InitializationProps) => {
   return <AuthPrompt onSubmit={connectWithKey} />
 }
 
-const Root = () => {
+const ChatApp = (_props: { path?: string }) => {
   const [client, setClient] = useState<NostrClient | null>(null)
 
   const handleLogout = () => {
@@ -101,5 +104,14 @@ const Root = () => {
   return <App client={client} onLogout={handleLogout} />
 }
 
-render(<Root />, document.getElementById('app')!)
+const Root = () => {
+  return (
+    <Router>
+      <LandingPage path="/" />
+      <ChatApp path="/app" />
+      <AdminPanel path="/admin" />
+    </Router>
+  )
+}
 
+render(<Root />, document.getElementById('app')!)

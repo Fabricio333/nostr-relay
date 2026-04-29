@@ -31,7 +31,7 @@ mod integration_tests {
             .unwrap(),
         );
 
-        GroupsRelayProcessor::new(groups, admin_keys.public_key(), vec![])
+        GroupsRelayProcessor::new(groups, admin_keys.public_key(), crate::whitelist::Whitelist::new(vec![], None))
     }
 
     /// Test that GroupsRelayProcessor can process events correctly

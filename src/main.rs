@@ -122,7 +122,7 @@ async fn async_main() -> Result<()> {
     let mut settings = config::Settings {
         relay_url: relay_settings.relay_url.clone(),
         local_addr: relay_settings.local_addr.clone(),
-        admin_keys: vec![],
+        admin_keys: relay_settings.admin_pubkeys.clone(),
         whitelisted_pubkeys: relay_settings.whitelisted_pubkeys.clone(),
         websocket: relay_settings.websocket.clone(),
         db_path: relay_settings.db_path.clone(),

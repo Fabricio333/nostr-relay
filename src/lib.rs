@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod app_state;
 pub mod config;
 pub mod create_client;
@@ -16,6 +17,7 @@ pub mod sampled_metrics_handler;
 pub mod server;
 pub mod utils;
 pub mod validation_middleware;
+pub mod whitelist;
 
 #[cfg(test)]
 pub mod test_utils;

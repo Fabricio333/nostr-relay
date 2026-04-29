@@ -1,7 +1,8 @@
 //! Integration test to verify groups_relay works with relay_builder
 
 use groups_relay::{
-    config::Keys, groups::Groups, groups_event_processor::GroupsRelayProcessor, RelayDatabase,
+    config::Keys, groups::Groups, groups_event_processor::GroupsRelayProcessor,
+    whitelist::Whitelist, RelayDatabase,
 };
 use relay_builder::{RelayBuilder, RelayConfig};
 use std::sync::Arc;
@@ -35,7 +36,7 @@ async fn test_groups_relay_with_relay_builder() -> anyhow::Result<()> {
     )
     .with_subdomains(2);
 
-    let groups_processor = GroupsRelayProcessor::new(groups, keys.public_key());
+    let groups_processor = GroupsRelayProcessor::new(groups, keys.public_key(), Whitelist::new(vec![], None));
 
     let _handler = RelayBuilder::<(), GroupsRelayProcessor>::new(relay_config)
         .event_processor(groups_processor)

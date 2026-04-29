@@ -13,6 +13,11 @@ relay:
     # npub1ur853z967pvl8mnzglzvedgnzqsznkmzeuw7rvzw0dappfvke53srvd97k
     - "e0cf4888baf059f3ee6247c4ccb513102029db62cf1de1b04e7b7a10a596cd23"
 
+  # Admin pubkeys (hex) - can access the admin panel
+  admin_pubkeys:
+    # Same as owner
+    - "d9590d95a7811e1cb312be66edd664d7e3e6ed57822ad9f213ed620fc6748be8"
+
   max_subscriptions: 50
   max_limit: 500
 

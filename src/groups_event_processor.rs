@@ -4,6 +4,7 @@ use crate::groups::{
     KIND_GROUP_EDIT_METADATA_9002, KIND_GROUP_REMOVE_USER_9001, KIND_GROUP_SET_ROLES_9006,
     KIND_GROUP_USER_JOIN_REQUEST_9021, KIND_GROUP_USER_LEAVE_REQUEST_9022, NON_GROUP_ALLOWED_KINDS,
 };
+use crate::whitelist::Whitelist;
 use crate::Groups;
 use nostr_sdk::prelude::*;
 use relay_builder::{EventContext, EventProcessor, Result, StoreCommand};
@@ -26,7 +27,7 @@ use tracing::debug;
 pub struct GroupsRelayProcessor {
     groups: Arc<Groups>,
     relay_pubkey: PublicKey,
-    whitelisted_pubkeys: Vec<PublicKey>,
+    whitelist: Whitelist,
 }
 
 impl GroupsRelayProcessor {
@@ -35,27 +36,27 @@ impl GroupsRelayProcessor {
     /// # Arguments
     /// * `groups` - The groups state manager for this relay
     /// * `relay_pubkey` - The relay's public key
-    /// * `whitelisted_pubkeys` - Pubkeys allowed to use this relay (empty = no restriction)
+    /// * `whitelist` - Shared whitelist of allowed pubkeys (empty = no restriction)
     pub fn new(
         groups: Arc<Groups>,
         relay_pubkey: PublicKey,
-        whitelisted_pubkeys: Vec<PublicKey>,
+        whitelist: Whitelist,
     ) -> Self {
         Self {
             groups,
             relay_pubkey,
-            whitelisted_pubkeys,
+            whitelist,
         }
     }
 
     /// Check if a pubkey is allowed to use this relay.
     /// Returns true if whitelist is empty (no restriction) or pubkey is in the list.
     fn is_allowed(&self, pubkey: &Option<PublicKey>) -> bool {
-        if self.whitelisted_pubkeys.is_empty() {
+        if self.whitelist.is_empty() {
             return true;
         }
         match pubkey {
-            Some(pk) => self.whitelisted_pubkeys.contains(pk) || *pk == self.relay_pubkey,
+            Some(pk) => self.whitelist.contains(pk) || *pk == self.relay_pubkey,
             None => false,
         }
     }
@@ -311,6 +312,7 @@ impl EventProcessor for GroupsRelayProcessor {
 mod tests {
     use super::*;
     use crate::test_utils::{create_test_event, create_test_keys, setup_test};
+    use crate::whitelist::Whitelist;
     use nostr_lmdb::Scope;
 
     fn empty_state() -> Arc<RwLock<()>> {
@@ -330,7 +332,7 @@ mod tests {
             .unwrap(),
         );
 
-        let processor = GroupsRelayProcessor::new(groups.clone(), admin_keys.public_key(), vec![]);
+        let processor = GroupsRelayProcessor::new(groups.clone(), admin_keys.public_key(), Whitelist::new(vec![], None));
 
         // Verify the logic was created correctly
         assert_eq!(processor.relay_pubkey(), &admin_keys.public_key());
@@ -350,7 +352,7 @@ mod tests {
             .unwrap(),
         );
 
-        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key(), vec![]);
+        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key(), Whitelist::new(vec![], None));
         let (_admin_keys, member_keys, _non_member_keys) = create_test_keys().await;
 
         // Create a non-group event (no 'h' tag)
@@ -382,7 +384,7 @@ mod tests {
             .unwrap(),
         );
 
-        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key(), vec![]);
+        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key(), Whitelist::new(vec![], None));
         let (_admin_keys, member_keys, _non_member_keys) = create_test_keys().await;
 
         // Create an unmanaged group event (has 'h' tag but group doesn't exist)

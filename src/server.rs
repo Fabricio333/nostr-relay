@@ -1,8 +1,8 @@
 use crate::{
-    app_state::HttpServerState, config, groups::Groups,
+    admin, app_state::HttpServerState, config, groups::Groups,
     groups_event_processor::GroupsRelayProcessor, handler, metrics,
     metrics_handler::PrometheusSubscriptionMetricsHandler,
-    sampled_metrics_handler::SampledMetricsHandler, RelayDatabase,
+    sampled_metrics_handler::SampledMetricsHandler, whitelist::Whitelist, RelayDatabase,
 };
 use anyhow::Result;
 use axum::{response::IntoResponse, routing::get, Router};
@@ -29,6 +29,9 @@ pub struct ServerState {
     pub metrics_handle: metrics::PrometheusHandle,
     pub connection_counter: Arc<AtomicUsize>,
     pub relay_url: String,
+    pub whitelist: Whitelist,
+    pub start_time: std::time::Instant,
+    pub config_dir: String,
 }
 
 pub async fn run_server(
@@ -73,18 +76,31 @@ pub async fn run_server(
     // Enable NIP-42 authentication
     relay_config.enable_auth = true;
 
-    // Parse whitelisted pubkeys
-    let whitelisted: Vec<PublicKey> = settings
+    // Parse whitelisted pubkeys and create shared whitelist
+    let initial_whitelist: Vec<PublicKey> = settings
         .whitelisted_pubkeys
         .iter()
         .filter_map(|hex| PublicKey::from_hex(hex).ok())
         .collect();
-    if !whitelisted.is_empty() {
-        info!("Whitelist enabled: {} pubkeys allowed", whitelisted.len());
+    let config_dir = std::path::Path::new("config");
+    let whitelist = Whitelist::new(initial_whitelist, Some(config_dir));
+    if !whitelist.is_empty() {
+        info!("Whitelist enabled: {} pubkeys allowed", whitelist.len());
     }
 
+    // Parse admin pubkeys
+    let admin_pubkeys: Vec<PublicKey> = settings
+        .admin_keys
+        .iter()
+        .filter_map(|hex| PublicKey::from_hex(hex).ok())
+        .collect();
+    if !admin_pubkeys.is_empty() {
+        info!("Admin panel enabled: {} admin pubkeys", admin_pubkeys.len());
+    }
+    admin::init_admin_state(admin_pubkeys, settings.relay_url.clone());
+
     let groups_processor =
-        GroupsRelayProcessor::new(groups.clone(), relay_keys.public_key, whitelisted);
+        GroupsRelayProcessor::new(groups.clone(), relay_keys.public_key, whitelist.clone());
 
     // Create cancellation token and connection counter
     let cancellation_token = CancellationToken::new();
@@ -125,6 +141,9 @@ pub async fn run_server(
         metrics_handle: metrics_handle.clone(),
         connection_counter: connection_counter.clone(),
         relay_url: settings.relay_url.clone(),
+        whitelist: whitelist.clone(),
+        start_time: std::time::Instant::now(),
+        config_dir: "config".to_string(),
     });
 
     let cors = CorsLayer::new()
@@ -175,6 +194,8 @@ pub async fn run_server(
     let api_routes = Router::new()
         .route("/api/subdomains", get(handler::handle_subdomains))
         .route("/api/config", get(handler::handle_config))
+        .nest("/api/admin", admin::admin_routes())
+        .nest("/api", admin::public_api_routes())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .with_state(app_state);
 
@@ -185,7 +206,7 @@ pub async fn run_server(
         .route("/metrics", get(metrics_handler))
         .merge(api_routes)
         .nest_service("/assets", ServeDir::new("frontend/dist/assets"))
-        .fallback_service(ServeDir::new("frontend/dist"))
+        .fallback(handler::serve_frontend)
         .layer(cors);
 
     let addr = settings.local_addr.parse::<SocketAddr>()?;

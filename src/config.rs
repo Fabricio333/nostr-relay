@@ -23,6 +23,8 @@ pub struct RelaySettings {
     pub max_subscriptions: usize,
     #[serde(default)]
     pub whitelisted_pubkeys: Vec<String>,
+    #[serde(default)]
+    pub admin_pubkeys: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
