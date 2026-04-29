@@ -21,6 +21,8 @@ pub struct RelaySettings {
     pub max_limit: usize,
     #[serde(default = "default_max_subscriptions")]
     pub max_subscriptions: usize,
+    #[serde(default)]
+    pub whitelisted_pubkeys: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -126,6 +128,7 @@ pub struct Settings {
     pub relay_url: String,
     pub local_addr: String,
     pub admin_keys: Vec<String>,
+    pub whitelisted_pubkeys: Vec<String>,
     pub websocket: WebSocketSettings,
     pub db_path: String,
     pub max_limit: usize,

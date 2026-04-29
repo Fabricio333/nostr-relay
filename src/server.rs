@@ -7,6 +7,7 @@ use crate::{
 use anyhow::Result;
 use axum::{response::IntoResponse, routing::get, Router};
 use relay_builder::{handle_upgrade, HandlerFactory, WebSocketUpgrade};
+use nostr_sdk::prelude::PublicKey;
 use relay_builder::{
     CryptoHelper, Nip40ExpirationMiddleware, Nip70Middleware, RelayBuilder, RelayConfig, RelayInfo,
     WebSocketConfig,
@@ -72,7 +73,18 @@ pub async fn run_server(
     // Enable NIP-42 authentication
     relay_config.enable_auth = true;
 
-    let groups_processor = GroupsRelayProcessor::new(groups.clone(), relay_keys.public_key);
+    // Parse whitelisted pubkeys
+    let whitelisted: Vec<PublicKey> = settings
+        .whitelisted_pubkeys
+        .iter()
+        .filter_map(|hex| PublicKey::from_hex(hex).ok())
+        .collect();
+    if !whitelisted.is_empty() {
+        info!("Whitelist enabled: {} pubkeys allowed", whitelisted.len());
+    }
+
+    let groups_processor =
+        GroupsRelayProcessor::new(groups.clone(), relay_keys.public_key, whitelisted);
 
     // Create cancellation token and connection counter
     let cancellation_token = CancellationToken::new();
@@ -80,14 +92,14 @@ pub async fn run_server(
 
     // Define relay information
     let _relay_info = RelayInfo {
-        name: "Nostr Groups Relay".to_string(),
-        description: "A specialized relay implementing NIP-29 for Nostr group management. This relay is under development and all data may be deleted in the future".to_string(),
+        name: "Obelisk Groups Relay".to_string(),
+        description: "NIP-29 groups relay for Obelisk. Auth-required, whitelisted access.".to_string(),
         pubkey: relay_keys.public_key.to_string(),
-        contact: "https://daniel.nos.social".to_string(),
+        contact: "npub1m9vsm9d8sy0pevcjhenwm4ny6l37dm2hsg4dnusna43ql3n5305qy4zlg4".to_string(),
         supported_nips: vec![1, 9, 11, 29, 40, 42, 70],
         software: "groups_relay".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        icon: Some("https://pfp.nostr.build/c60f4853a6d4ae046bdbbd935f0ccd7354c9c411c324b411666d325562a5a906.png".to_string()),
+        icon: None,
     };
 
     // Build the relay service

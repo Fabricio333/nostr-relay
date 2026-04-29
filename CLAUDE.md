@@ -1,233 +1,208 @@
-# CLAUDE.md
+# CLAUDE.md — Obelisk Nostr Relay
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This is the **Obelisk NIP-29 Groups Relay** — a whitelisted Nostr relay for relay-based group chat, forked from [verse-pbc/groups_relay](https://github.com/verse-pbc/groups_relay) and customized for the Obelisk ecosystem.
 
-## Repository Overview
+Production URL: `wss://relay.obelisk.ar`
 
-A NIP-29 relay implementation with group/chat functionality, built on the relay_builder framework. Features a Preact-based web UI with Cashu wallet integration.
+## What This Relay Does
+
+A NIP-29 relay manages **group chats at the relay level**. Unlike regular Nostr relays that just store and forward events, this relay:
+
+- **Enforces group membership** — only members can post to a group
+- **Manages roles** — admin, moderator, member with different permissions
+- **Controls visibility** — private groups are only readable by members
+- **Handles invites** — invite codes with expiration and usage limits
+- **Whitelists pubkeys** — only approved Nostr identities can connect at all
 
 ## Architecture
 
+```
+Internet → Caddy (:443, HTTPS) → relay container (:8080)
+                                    ├── Axum HTTP server
+                                    │   ├── WebSocket upgrade → Nostr protocol
+                                    │   ├── /health
+                                    │   ├── /metrics (Prometheus)
+                                    │   └── / (Preact frontend)
+                                    ├── GroupsRelayProcessor (NIP-29 logic)
+                                    ├── ValidationMiddleware (event validation)
+                                    └── nostr-lmdb (LMDB database)
+```
+
 ### Core Components
-- **Groups System** (`src/groups.rs`, `src/group.rs`) - Manages NIP-29 groups with role-based permissions
-- **Validation Middleware** (`src/validation_middleware.rs`) - Groups-specific event validation
-- **Groups Event Processor** (`src/groups_event_processor.rs`) - Handles group-related event processing
-- **Database** - Uses nostr-lmdb with scoped storage for multi-tenant support
-- **Frontend** - Preact app with NDK wallet integration for Cashu payments
 
-### Key Event Kinds
-- `9000-9009`: Group management events (add/remove users, metadata, roles)
-- `9021-9022`: Join/leave requests
-- `39000-39003`: Group metadata (replaceable events)
-- `10009`: Simple lists
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/main.rs` | 163 | Entry point, Tokio runtime setup, CLI args |
+| `src/server.rs` | 224 | Axum router, WebSocket handler, relay builder setup |
+| `src/groups_event_processor.rs` | 422 | **Main brain** — NIP-29 business logic, whitelist enforcement |
+| `src/groups.rs` | 2078 | Group state management, DashMap with scoped storage |
+| `src/group.rs` | 3189 | Individual group logic — metadata, members, roles, permissions |
+| `src/validation_middleware.rs` | 131 | Validates events have required tags (h-tag for groups) |
+| `src/config.rs` | 138 | Config loading from YAML + env vars |
+| `src/handler.rs` | 143 | HTTP handlers (health, metrics, frontend) |
+| `src/metrics.rs` | 239 | Prometheus metrics collection |
 
-## Development Commands
+### Event Processing Flow
 
-### Testing
-```bash
-# Run all tests (unit + integration)
-just test
-
-# Run specific test by name
-just test-name <test_name>
-
-# NIP-29 flow test (interactive)
-just test-nip29
-
-# NIP-29 flow test (automated)
-just test-nip29-auto
-
-# Test coverage with HTML report
-just coverage
+```
+Client sends EVENT → WebSocket
+  → ValidationMiddleware (checks h-tag, basic structure)
+  → GroupsRelayProcessor.handle_event()
+    → is_allowed() — whitelist check
+    → Route by event kind:
+        9007 → create group
+        9000 → add user
+        9001 → remove user
+        9002 → edit metadata
+        9005 → delete event
+        9006 → set roles
+        9009 → create invite
+        9021 → join request
+        9022 → leave request
+        other → group content (if h-tag present)
+    → StoreCommand(s) → nostr-lmdb
+  → Broadcast to subscribers
 ```
 
-### Building & Running
-```bash
-# Run in debug mode
-just run
+### Whitelist Mechanism
 
-# Run with debug logging
-just run-debug
+The relay enforces a pubkey whitelist defined in `config/settings.local.yml`:
 
-# Build release version
-just build-release
-
-# Run benchmarks
-just bench
+```yaml
+whitelisted_pubkeys:
+  - "hex_pubkey_1"  # Only these can connect
+  - "hex_pubkey_2"
 ```
 
-### Code Quality
-```bash
-# Format code
-just fmt
+**How it works** (`src/groups_event_processor.rs`):
+- `is_allowed()` checks if the authenticated pubkey is in the whitelist
+- Empty whitelist = no restriction (all pubkeys allowed)
+- Relay's own pubkey always has access
+- Enforced at both `verify_filters()` (read) and `handle_event()` (write)
+- Requires NIP-42 authentication when whitelist is active
 
-# Run clippy linter
-just clippy
+### Current Whitelisted Pubkeys (3)
 
-# Run all checks (format, clippy, tests)
-just check
-```
+| npub | Hex |
+|------|-----|
+| `npub1m9vsm9d8sy0pevcjhenwm4ny6l37dm2hsg4dnusna43ql3n5305qy4zlg4` | `d9590d95...` (owner) |
+| `npub1gxdhmu9swqduwhr6zptjy4ya693zp3ql28nemy4hd97kuufyrqdqwe5zfk` | `419b7df0...` |
+| `npub1ur853z967pvl8mnzglzvedgnzqsznkmzeuw7rvzw0dappfvke53srvd97k` | `e0cf4888...` |
 
-### Frontend Development
-```bash
-cd frontend
-npm install
-npm run dev     # Development server with hot reload
-npm run build   # Production build
-```
+To add a new pubkey: edit `config/settings.local.yml`, add the hex pubkey, restart the container.
 
-## Testing Individual Components
+## NIP-29 Event Kinds
 
-```bash
-# Test specific middleware
-cargo test --test validation_middleware_test
+| Kind | Name | Who Can Send |
+|------|------|-------------|
+| 9000 | Add user to group | Admin |
+| 9001 | Remove user from group | Admin |
+| 9002 | Edit group metadata | Admin |
+| 9005 | Delete event from group | Admin/Moderator |
+| 9006 | Set roles | Admin |
+| 9007 | Create group | Any whitelisted user |
+| 9008 | Delete group | Admin |
+| 9009 | Create invite | Admin |
+| 9021 | Join request | Any whitelisted user |
+| 9022 | Leave request | Group member |
+| 39000 | Group metadata (replaceable) | Relay |
+| 39001 | Group admins (replaceable) | Relay |
+| 39002 | Group members (replaceable) | Relay |
+| 39003 | Group roles (replaceable) | Relay |
 
-# Test with debug output
-cargo test <test_name> -- --nocapture
+## Group Types
 
-# Test with specific log level
-RUST_LOG=debug cargo test <test_name> -- --nocapture
-
-# Run integration tests only
-cargo nextest run --test '*' --all-features
-```
+- **Public/Private** — Private groups require membership to read events
+- **Open/Closed** — Open groups auto-accept join requests; closed require admin approval
+- **Broadcast** — Only admins can post content; members can only join/leave
 
 ## Configuration
 
-The relay uses a config directory (default: `config/`) with TOML files:
-- `relay_url`: WebSocket URL for the relay
-- `local_addr`: Local address to bind
-- `db_path`: Database directory path
-- `max_limit`: Maximum event limit per subscription
-- `max_subscriptions`: Maximum concurrent subscriptions
+Config is loaded in priority order (later overrides earlier):
+1. `config/settings.yml` — defaults
+2. `config/settings.local.yml` — production overrides (whitelist, keys, URL)
+3. Environment variables with `NIP29__` prefix
 
-Override with CLI args:
-```bash
-cargo run -- --config-dir config --relay-url ws://localhost:8080 --local_addr 127.0.0.1:8080
+Key settings in `config/settings.local.yml`:
+```yaml
+relay:
+  relay_secret_key: "hex_private_key"
+  relay_url: "wss://relay.obelisk.ar"
+  local_addr: "0.0.0.0:8080"
+  db_path: "/app/db"
+  whitelisted_pubkeys: [...]
+  max_subscriptions: 50
+  max_limit: 500
+  websocket:
+    max_connection_duration: "24h"
+    idle_timeout: "30m"
+    max_connections: 300
 ```
 
-## Performance Profiling
-
-```bash
-# Run benchmarks
-cargo bench --workspace
-
-# Generate flamegraph (requires cargo-flamegraph)
-./scripts/run_flamegraph.sh
-
-# Performance test script
-./scripts/groups_relay_performance_test.sh
-```
-
-## Docker Support
+## Development Commands
 
 ```bash
-# Build Docker image
-docker build -t groups_relay .
-
-# Run with docker-compose
-docker compose up --build
-
-# Tag and push images
-./scripts/tag_image.sh <version>
-./scripts/tag_latest_as_stable.sh
+just test              # Run all tests
+just test-name <name>  # Run specific test
+just run               # Debug mode
+just run-debug         # Debug with verbose logging
+just build-release     # Production build
+just fmt               # Format code
+just clippy            # Lint
+just check             # Format + clippy + tests
+just bench             # Benchmarks
 ```
 
-## Debugging Tips
+## Docker Deployment
 
-### WebSocket Issues
-- Enable debug logging: `RUST_LOG=debug,groups_relay=trace`
-- Use `./scripts/diagnose_network.sh` for network diagnostics
-- Check browser console for connection errors
-
-### NIP-29 Flow Testing
-- Use `./scripts/flow29.sh` for comprehensive group operation testing
-- Interactive mode allows step-by-step verification
-- Automated mode for CI/CD pipelines
-
-### Database Issues
-- Database utilities included in Docker image:
-  - `nostr-lmdb-dump`: Export database contents
-  - `nostr-lmdb-integrity`: Check database integrity
-  - `export_import`: Export/import relay data
-  - `negentropy_sync`: Sync between relays
-
-### Async Runtime Debugging with tokio-console
-
-The relay is instrumented with tokio-console for debugging async issues.
-
-**Local Development:**
 ```bash
-# Build with console feature
-cargo run --features console
+# Build and start
+docker compose up -d --build
 
-# In another terminal
-tokio-console http://localhost:6669
+# Check health
+curl http://localhost:8080/health
+
+# View logs
+docker compose logs -f groups_relay
+
+# Stop
+docker compose down
 ```
 
-**Production/Remote:**
-```bash
-# Port 6669 is already exposed
-ssh communities
-source ~/.cargo/env
-tokio-console http://localhost:6669
-```
+The relay listens on port 8080. Caddy (in the obelisk stack) reverse-proxies `relay.obelisk.ar` → `localhost:8080` with WebSocket support.
 
-**Quick Diagnostics (from your laptop):**
-```bash
-# tokio-console only
-./scripts/diagnose_tokio_console.sh communities
+## Frontend
 
-# Comprehensive diagnostics (recommended)
-./scripts/diagnose_server.sh communities
-```
+Preact-based web UI in `frontend/`:
+- 37 TypeScript components
+- NDK for Nostr protocol
+- Cashu wallet integration (NIP-60/61)
+- Tailwind CSS styling
+- Built with Vite, served by the relay at `/`
 
-**Common Issues:**
-- **Lost Wakers**: Tasks cancelled before running (check for timeout issues)
-- **High Poll Counts**: Tasks spinning or busy-waiting
-- **Stuck Tasks**: Long-running tasks blocking the runtime
+## Database
 
-See `docs/debugging_async_issues.md` for comprehensive debugging guide.
+Uses **nostr-lmdb** with scoped storage for multi-tenant subdomain support. Data stored in Docker volume `relay-db` mounted at `/app/db`.
 
-**Key Views:**
-- `t` - Tasks view (shows all async tasks)
-- `r` - Resources view (mutexes, semaphores)
-- `Enter` - Inspect selected task details
+Included utilities (in Docker image):
+- `nostr-lmdb-dump` — export database
+- `nostr-lmdb-integrity` — check integrity
+- `export_import` — export/import relay data
+- `negentropy_sync` — relay-to-relay sync
 
-## Frontend Architecture
+## Tech Stack
 
-### NDK Wallet Integration
-- Uses `@nostr-dev-kit/ndk-wallet` for Cashu wallet functionality
-- Supports nutzaps and mint management
-- Local storage with localforage for persistence
+- **Rust** (Tokio async runtime, Axum web framework)
+- **relay_builder** + **websocket_builder** — Nostr relay framework by verse-pbc
+- **nostr-sdk** — Nostr protocol implementation
+- **nostr-lmdb** — LMDB database with scoped storage
+- **Preact** + **TypeScript** — Frontend
+- **Docker** — Deployment
 
-### State Management
-- Event subscriptions managed through NDK
-- Group state synchronized with relay
-- Optimistic UI updates with rollback on failure
+## Upstream
 
-## Common Patterns
-
-### Scoped Storage
-Groups use scoped storage with `(Scope, group_id)` keys for multi-tenant support:
-```rust
-let scoped_key = (scope.clone(), group_id);
-groups.insert(scoped_key, group);
-```
-
-### Event Processing Flow
-1. ValidationMiddleware validates group events
-2. GroupsEventProcessor handles group-specific logic
-3. Storage layer persists to nostr-lmdb
-4. Frontend receives updates via WebSocket subscription
-
-### Testing Patterns
-- Use `test_utils.rs` for common test fixtures
-- Integration tests use real WebSocket connections
-- Unit tests mock database interactions
-
-## Included Binaries
-
-- `groups_relay`: Main relay server
-- `add_original_relay`: Utility to add original relay tags to events
-- `delete_event`: Remove specific events from database
+Forked from [verse-pbc/groups_relay](https://github.com/verse-pbc/groups_relay). Our customizations:
+- Pubkey whitelist in `config/settings.local.yml`
+- Production config for `wss://relay.obelisk.ar`
+- `start.sh` launcher script
+- Roadmap for admin panel with Nostr authentication

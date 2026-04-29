@@ -26,6 +26,7 @@ use tracing::debug;
 pub struct GroupsRelayProcessor {
     groups: Arc<Groups>,
     relay_pubkey: PublicKey,
+    whitelisted_pubkeys: Vec<PublicKey>,
 }
 
 impl GroupsRelayProcessor {
@@ -34,10 +35,28 @@ impl GroupsRelayProcessor {
     /// # Arguments
     /// * `groups` - The groups state manager for this relay
     /// * `relay_pubkey` - The relay's public key
-    pub fn new(groups: Arc<Groups>, relay_pubkey: PublicKey) -> Self {
+    /// * `whitelisted_pubkeys` - Pubkeys allowed to use this relay (empty = no restriction)
+    pub fn new(
+        groups: Arc<Groups>,
+        relay_pubkey: PublicKey,
+        whitelisted_pubkeys: Vec<PublicKey>,
+    ) -> Self {
         Self {
             groups,
             relay_pubkey,
+            whitelisted_pubkeys,
+        }
+    }
+
+    /// Check if a pubkey is allowed to use this relay.
+    /// Returns true if whitelist is empty (no restriction) or pubkey is in the list.
+    fn is_allowed(&self, pubkey: &Option<PublicKey>) -> bool {
+        if self.whitelisted_pubkeys.is_empty() {
+            return true;
+        }
+        match pubkey {
+            Some(pk) => self.whitelisted_pubkeys.contains(pk) || *pk == self.relay_pubkey,
+            None => false,
         }
     }
 
@@ -87,6 +106,13 @@ impl EventProcessor for GroupsRelayProcessor {
         _custom_state: Arc<RwLock<()>>,
         context: &EventContext,
     ) -> Result<()> {
+        // Enforce pubkey whitelist
+        if !self.is_allowed(&context.authed_pubkey) {
+            return Err(relay_builder::Error::auth_required(
+                "Authentication required: this relay only accepts whitelisted pubkeys".to_string(),
+            ));
+        }
+
         // For groups relay, we need to verify access to group queries
         for filter in filters {
             // Check if this filter queries group-related data
@@ -155,6 +181,13 @@ impl EventProcessor for GroupsRelayProcessor {
         _custom_state: Arc<RwLock<()>>,
         context: &EventContext,
     ) -> Result<Vec<StoreCommand>> {
+        // Enforce pubkey whitelist
+        if !self.is_allowed(&context.authed_pubkey) {
+            return Err(relay_builder::Error::restricted(
+                "Access denied: your pubkey is not whitelisted on this relay".to_string(),
+            ));
+        }
+
         let subdomain = context.subdomain.clone();
 
         // Allow events through for unmanaged groups (groups not in relay state)
@@ -297,7 +330,7 @@ mod tests {
             .unwrap(),
         );
 
-        let processor = GroupsRelayProcessor::new(groups.clone(), admin_keys.public_key());
+        let processor = GroupsRelayProcessor::new(groups.clone(), admin_keys.public_key(), vec![]);
 
         // Verify the logic was created correctly
         assert_eq!(processor.relay_pubkey(), &admin_keys.public_key());
@@ -317,7 +350,7 @@ mod tests {
             .unwrap(),
         );
 
-        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key());
+        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key(), vec![]);
         let (_admin_keys, member_keys, _non_member_keys) = create_test_keys().await;
 
         // Create a non-group event (no 'h' tag)
@@ -349,7 +382,7 @@ mod tests {
             .unwrap(),
         );
 
-        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key());
+        let processor = GroupsRelayProcessor::new(groups, admin_keys.public_key(), vec![]);
         let (_admin_keys, member_keys, _non_member_keys) = create_test_keys().await;
 
         // Create an unmanaged group event (has 'h' tag but group doesn't exist)

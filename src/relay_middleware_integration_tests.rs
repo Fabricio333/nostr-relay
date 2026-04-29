@@ -31,7 +31,7 @@ mod integration_tests {
             .unwrap(),
         );
 
-        GroupsRelayProcessor::new(groups, admin_keys.public_key())
+        GroupsRelayProcessor::new(groups, admin_keys.public_key(), vec![])
     }
 
     /// Test that GroupsRelayProcessor can process events correctly
