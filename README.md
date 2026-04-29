@@ -1,47 +1,72 @@
-# Groups Relay
+# Nostr Groups Relay
 
-[![codecov](https://codecov.io/gh/verse-pbc/groups_relay/branch/main/graph/badge.svg)](https://codecov.io/gh/verse-pbc/groups_relay)
+A [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) relay for group chats on Nostr, with pubkey whitelisting and role-based permissions.
 
-[NIP-29: Relay-based Groups](https://github.com/nostr-protocol/nips/blob/master/29.md) implementation.
-
-## Implementation Status
-
-- ✅ All event kinds (9000-9009, 9021-9022, 39000-39003)  
-- ✅ Group types (public/private, open/closed, broadcast)
-- ✅ Moderation actions and role-based permissions
-- ✅ Join requests and invite codes
-- ❌ Timeline references (not implemented)
-
-Also supports NIPs 09, 40, 42, 70.
+Forked from [verse-pbc/groups_relay](https://github.com/verse-pbc/groups_relay).
 
 ## Quick Start
 
 ```bash
-cargo run
-# or
-docker compose up --build
+git clone https://github.com/fabricio333/nostr-relay.git
+cd nostr-relay
+./setup.sh
 ```
 
-Web UI at `http://localhost:8080`
+That's it. The setup wizard will walk you through everything:
 
-## Development
+1. Checks Docker is installed
+2. Asks for your relay domain
+3. Asks for your admin npub
+4. Lets you add whitelisted pubkeys
+5. Generates config and starts the relay
+
+## What It Does
+
+- **NIP-29 groups** — Create and manage group chats at the relay level
+- **Pubkey whitelist** — Only approved Nostr identities can connect
+- **Roles & permissions** — Admin, moderator, member with different access levels
+- **Private groups** — Content only visible to members
+- **Invite codes** — Share time-limited invite links
+- **Web UI** — Built-in Preact frontend at the relay URL
+- **Cashu wallet** — NIP-60/61 micropayment support
+
+## Management
 
 ```bash
-cargo test
-cargo fmt
-cargo clippy
+./start.sh status    # Is it running?
+./start.sh logs      # View relay logs
+./start.sh restart   # Restart after config changes
+./start.sh stop      # Stop the relay
 ```
 
-Built on [relay_builder](https://github.com/verse-pbc/relay_builder) and [websocket_builder](https://github.com/verse-pbc/websocket_builder).
+## Configuration
 
-## Included Utilities
+Edit `config/settings.local.yml` to change settings:
 
-The Docker image includes these utility binaries from relay_builder:
+```yaml
+relay:
+  relay_url: "wss://relay.yourdomain.com"
+  whitelisted_pubkeys:
+    - "hex_pubkey_here"
+```
 
-- **export_import** - Export/import relay data
-- **negentropy_sync** - Relay-to-relay synchronization using Negentropy protocol
-- **nostr-lmdb-dump** - Dump LMDB database contents
-- **nostr-lmdb-integrity** - Check LMDB database integrity
+Restart after changes: `./start.sh restart`
+
+## Supported NIPs
+
+- NIP-29 (Relay-based Groups) — all event kinds
+- NIP-09 (Event Deletion)
+- NIP-40 (Expiration Timestamp)
+- NIP-42 (Authentication)
+- NIP-70 (Protected Events)
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) — includes a Nostr-authenticated admin panel for content moderation.
+
+## Architecture
+
+See [CLAUDE.md](CLAUDE.md) for full architecture docs and [AGENTS.md](AGENTS.md) for the internal processing pipeline.
 
 ## License
 
