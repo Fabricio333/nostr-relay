@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'preact/hooks'
 import { adminApi } from '../../services/AdminApiClient'
+import { GroupEventBrowser } from './GroupEventBrowser'
 
 interface GroupInfo {
   id: string
@@ -19,6 +20,7 @@ export const GroupsOverview = () => {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [selectedGroup, setSelectedGroup] = useState<GroupInfo | null>(null)
 
   const showToast = (msg: string) => {
     setToast(msg)
@@ -141,30 +143,39 @@ export const GroupsOverview = () => {
                     </div>
                   </td>
                   <td class="px-4 py-3 text-right">
-                    {confirmDelete === group.id ? (
-                      <span class="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => handleDelete(group.id)}
-                          disabled={deleting === group.id}
-                          class="text-sm text-red-400 hover:text-red-300 transition-colors"
-                        >
-                          {deleting === group.id ? 'Deleting...' : 'Confirm delete'}
-                        </button>
-                        <button
-                          onClick={() => setConfirmDelete(null)}
-                          class="text-sm transition-colors" style={{ color: 'var(--color-text-secondary)' }}
-                        >
-                          Cancel
-                        </button>
-                      </span>
-                    ) : (
+                    <span class="flex items-center justify-end gap-3">
                       <button
-                        onClick={() => setConfirmDelete(group.id)}
-                        class="text-sm text-red-400 hover:text-red-300 transition-colors opacity-60 hover:opacity-100"
+                        onClick={() => setSelectedGroup(group)}
+                        class="text-sm transition-colors opacity-60 hover:opacity-100"
+                        style={{ color: 'var(--color-text-secondary)' }}
                       >
-                        Delete
+                        Events
                       </button>
-                    )}
+                      {confirmDelete === group.id ? (
+                        <>
+                          <button
+                            onClick={() => handleDelete(group.id)}
+                            disabled={deleting === group.id}
+                            class="text-sm text-red-400 hover:text-red-300 transition-colors"
+                          >
+                            {deleting === group.id ? 'Deleting...' : 'Confirm delete'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete(null)}
+                            class="text-sm transition-colors" style={{ color: 'var(--color-text-secondary)' }}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDelete(group.id)}
+                          class="text-sm text-red-400 hover:text-red-300 transition-colors opacity-60 hover:opacity-100"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -179,6 +190,13 @@ export const GroupsOverview = () => {
           : `${groups.length} group${groups.length !== 1 ? 's' : ''}`
         }
       </div>
+
+      {selectedGroup && (
+        <GroupEventBrowser
+          group={selectedGroup}
+          onClose={() => setSelectedGroup(null)}
+        />
+      )}
     </div>
   )
 }

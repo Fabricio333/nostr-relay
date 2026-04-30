@@ -138,6 +138,46 @@ export class AdminApiClient {
   async deleteGroup(id: string): Promise<void> {
     return this.request(`/api/admin/groups/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
+
+  async getGroupEvents(groupId: string, limit?: number, author?: string): Promise<EventInfo[]> {
+    const params = new URLSearchParams()
+    if (limit) params.set('limit', String(limit))
+    if (author) params.set('author', author)
+    const q = params.toString() ? `?${params}` : ''
+    return this.request(`/api/admin/groups/${encodeURIComponent(groupId)}/events${q}`)
+  }
+
+  async getGroupMembers(groupId: string): Promise<MemberInfo[]> {
+    return this.request(`/api/admin/groups/${encodeURIComponent(groupId)}/members`)
+  }
+
+  async deleteEvent(eventId: string): Promise<void> {
+    return this.request(`/api/admin/events/${eventId}`, { method: 'DELETE' })
+  }
+
+  async removeGroupMember(groupId: string, pubkey: string): Promise<void> {
+    return this.request(
+      `/api/admin/groups/${encodeURIComponent(groupId)}/members/${pubkey}`,
+      { method: 'DELETE' },
+    )
+  }
+
+  async deleteUserEvents(pubkey: string): Promise<void> {
+    return this.request(`/api/admin/users/${pubkey}/events`, { method: 'DELETE' })
+  }
+}
+
+export interface EventInfo {
+  id: string
+  pubkey: string
+  kind: number
+  content: string
+  created_at: number
+}
+
+export interface MemberInfo {
+  pubkey: string
+  roles: string[]
 }
 
 export const adminApi = new AdminApiClient()

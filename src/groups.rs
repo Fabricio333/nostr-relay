@@ -709,6 +709,185 @@ impl Groups {
         Ok(())
     }
 
+    /// Admin-only: get recent events in a group, optionally filtered by author.
+    pub async fn admin_get_group_events(
+        &self,
+        group_id: &str,
+        limit: usize,
+        author: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>, Error> {
+        // Find the scope for this group
+        let scope = self
+            .groups
+            .iter()
+            .find(|e| e.key().1 == group_id)
+            .map(|e| e.key().0.clone())
+            .ok_or_else(|| Error::notice("Group not found"))?;
+
+        let mut filter = Filter::new()
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::H), group_id.to_string())
+            .limit(limit)
+            .since(Timestamp::from(0));
+
+        if let Some(pubkey_hex) = author {
+            let pubkey = PublicKey::from_hex(pubkey_hex)
+                .map_err(|_| Error::notice("Invalid author pubkey"))?;
+            filter = filter.author(pubkey);
+        }
+
+        let raw = self
+            .db
+            .query(vec![filter], &scope)
+            .await
+            .map_err(|e| Error::internal(e.to_string()))?;
+
+        // Collect into a Vec so we can sort
+        let mut events: Vec<Event> = raw.into_iter().collect();
+        events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        let result = events
+            .into_iter()
+            .map(|e| {
+                let content = if e.content.len() > 200 {
+                    format!("{}…", &e.content[..200])
+                } else {
+                    e.content.clone()
+                };
+                serde_json::json!({
+                    "id": e.id.to_hex(),
+                    "pubkey": e.pubkey.to_hex(),
+                    "kind": e.kind.as_u16(),
+                    "content": content,
+                    "created_at": e.created_at.as_secs(),
+                })
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    /// Admin-only: delete a single event by ID across all scopes.
+    pub async fn admin_delete_event(&self, event_id_hex: &str) -> Result<(), Error> {
+        let event_id = EventId::from_hex(event_id_hex)
+            .map_err(|_| Error::notice("Invalid event ID"))?;
+
+        let scopes: Vec<Scope> = self
+            .groups
+            .iter()
+            .map(|e| e.key().0.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        for scope in &scopes {
+            let filter = Filter::new().id(event_id);
+            self.db
+                .delete(filter, scope)
+                .await
+                .map_err(|e| Error::internal(e.to_string()))?;
+        }
+
+        info!("Admin deleted event '{}'", event_id_hex);
+        Ok(())
+    }
+
+    /// Admin-only: list members of a group with their roles.
+    pub fn admin_get_group_members(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<serde_json::Value>, Error> {
+        let entry = self
+            .groups
+            .iter()
+            .find(|e| e.key().1 == group_id)
+            .ok_or_else(|| Error::notice("Group not found"))?;
+
+        let result = entry
+            .value()
+            .members
+            .values()
+            .map(|m| {
+                let roles: Vec<String> = m.roles.iter().map(|r| r.to_string()).collect();
+                serde_json::json!({
+                    "pubkey": m.pubkey.to_hex(),
+                    "roles": roles,
+                })
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    /// Admin-only: delete ALL events by a pubkey across all scopes (relay-wide wipe).
+    pub async fn admin_delete_user_events(&self, pubkey_hex: &str) -> Result<(), Error> {
+        let pubkey = PublicKey::from_hex(pubkey_hex)
+            .map_err(|_| Error::notice("Invalid pubkey"))?;
+
+        let scopes: Vec<Scope> = self
+            .groups
+            .iter()
+            .map(|e| e.key().0.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        for scope in &scopes {
+            let filter = Filter::new().author(pubkey);
+            self.db
+                .delete(filter, scope)
+                .await
+                .map_err(|e| Error::internal(e.to_string()))?;
+        }
+
+        info!("Admin wiped all events by '{}'", pubkey_hex);
+        Ok(())
+    }
+
+    /// Admin-only: remove a member from a group.
+    pub async fn admin_remove_group_member(
+        &self,
+        group_id: &str,
+        pubkey_hex: &str,
+    ) -> Result<(), Error> {
+        let pubkey = PublicKey::from_hex(pubkey_hex)
+            .map_err(|_| Error::notice("Invalid pubkey"))?;
+
+        // Find key
+        let key = self
+            .groups
+            .iter()
+            .find(|e| e.key().1 == group_id)
+            .map(|e| e.key().clone())
+            .ok_or_else(|| Error::notice("Group not found"))?;
+
+        {
+            let mut group = self
+                .groups
+                .get_mut(&key)
+                .ok_or_else(|| Error::notice("Group not found"))?;
+
+            if !group.members.contains_key(&pubkey) {
+                return Err(Error::notice("Member not found"));
+            }
+            group.members.remove(&pubkey);
+        }
+
+        let scope = &key.0;
+
+        // Remove add-user events for this member from DB
+        let filter = Filter::new()
+            .kind(KIND_GROUP_ADD_USER_9000)
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::H), group_id.to_string())
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::P), pubkey_hex.to_string());
+        self.db
+            .delete(filter, scope)
+            .await
+            .map_err(|e| Error::internal(e.to_string()))?;
+
+        info!("Admin removed member '{}' from group '{}'", pubkey_hex, group_id);
+        Ok(())
+    }
+
     /// Returns counts of groups by their privacy settings for all scopes
     pub fn count_groups_by_privacy(&self) -> [(bool, bool, usize); 4] {
         let mut counts = [

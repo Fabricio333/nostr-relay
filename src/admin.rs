@@ -1,7 +1,7 @@
 use crate::follow_sync;
 use crate::server::ServerState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
@@ -129,6 +129,27 @@ struct BlacklistEntry {
     npub: String,
 }
 
+#[derive(Serialize)]
+struct EventInfo {
+    id: String,
+    pubkey: String,
+    kind: u64,
+    content: String,
+    created_at: u64,
+}
+
+#[derive(Deserialize)]
+struct GroupEventsQuery {
+    limit: Option<usize>,
+    author: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MemberInfo {
+    pubkey: String,
+    roles: Vec<String>,
+}
+
 // --- Helper: generate random hex ---
 
 fn random_hex(bytes: usize) -> String {
@@ -198,6 +219,14 @@ pub fn admin_routes() -> Router<Arc<ServerState>> {
             get(handle_blacklist_list).post(handle_blacklist_add),
         )
         .route("/blacklist/{hex}", delete(handle_blacklist_remove))
+        .route("/groups/{id}/events", get(handle_group_events))
+        .route("/events/{event_id}", delete(handle_event_delete))
+        .route(
+            "/groups/{id}/members/{pubkey}",
+            delete(handle_group_member_remove),
+        )
+        .route("/groups/{id}/members", get(handle_group_members))
+        .route("/users/{pubkey}/events", delete(handle_user_events_delete))
 }
 
 pub fn public_api_routes() -> Router<Arc<ServerState>> {
@@ -860,6 +889,174 @@ async fn handle_blacklist_remove(
             warn!("Failed to persist blacklist: {}", e);
         }
     }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Group event / member handlers ---
+
+async fn handle_group_events(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Query(params): Query<GroupEventsQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let admin_state = get_admin_state(&state);
+    if validate_session(&admin_state, &headers).is_none() {
+        return Err(unauthorized());
+    }
+
+    let limit = params.limit.unwrap_or(100).min(500);
+    let author = params.author.as_deref();
+
+    let raw_events = state
+        .http_state
+        .groups
+        .admin_get_group_events(&group_id, limit, author)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    let events: Vec<EventInfo> = raw_events
+        .into_iter()
+        .filter_map(|v| {
+            Some(EventInfo {
+                id: v.get("id")?.as_str()?.to_string(),
+                pubkey: v.get("pubkey")?.as_str()?.to_string(),
+                kind: v.get("kind")?.as_u64()?,
+                content: v.get("content")?.as_str()?.to_string(),
+                created_at: v.get("created_at")?.as_u64()?,
+            })
+        })
+        .collect();
+
+    Ok(Json(events))
+}
+
+async fn handle_event_delete(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Path(event_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let admin_state = get_admin_state(&state);
+    if validate_session(&admin_state, &headers).is_none() {
+        return Err(unauthorized());
+    }
+
+    state
+        .http_state
+        .groups
+        .admin_delete_event(&event_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn handle_group_member_remove(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Path((group_id, pubkey)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let admin_state = get_admin_state(&state);
+    if validate_session(&admin_state, &headers).is_none() {
+        return Err(unauthorized());
+    }
+
+    state
+        .http_state
+        .groups
+        .admin_remove_group_member(&group_id, &pubkey)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn handle_group_members(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let admin_state = get_admin_state(&state);
+    if validate_session(&admin_state, &headers).is_none() {
+        return Err(unauthorized());
+    }
+
+    let raw = state
+        .http_state
+        .groups
+        .admin_get_group_members(&group_id)
+        .map_err(|e| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    let members: Vec<MemberInfo> = raw
+        .into_iter()
+        .filter_map(|v| {
+            Some(MemberInfo {
+                pubkey: v.get("pubkey")?.as_str()?.to_string(),
+                roles: v
+                    .get("roles")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|r| r.as_str().map(String::from))
+                    .collect(),
+            })
+        })
+        .collect();
+
+    Ok(Json(members))
+}
+
+async fn handle_user_events_delete(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Path(pubkey): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let admin_state = get_admin_state(&state);
+    if validate_session(&admin_state, &headers).is_none() {
+        return Err(unauthorized());
+    }
+
+    state
+        .http_state
+        .groups
+        .admin_delete_user_events(&pubkey)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
